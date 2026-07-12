@@ -37,5 +37,8 @@ jobs:
                que incluya: resumen del problema, causa probable, archivos/áreas
                afectadas (game.js, colisión, rotación, loop, etc.) y enfoque
                sugerido para la solución.
+               El comentario debe estar en formato Markdown válido para GitHub
+               (encabezados, listas, `código en línea` o bloques ``` según
+               corresponda) para que se renderice correctamente.
 
             Sé conciso y técnico.
