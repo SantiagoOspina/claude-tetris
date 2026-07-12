@@ -169,6 +169,26 @@ body {
   transform: translateX(20px);
 }
 
+/* ---- Power-ups ---- */
+.powerups ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.powerups li {
+  font-size: 12px;
+  color: var(--control-text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pu-icon {
+  font-size: 14px;
+}
+
 /* ---- Controles ---- */
 .controls ul {
   list-style: none;

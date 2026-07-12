@@ -28,6 +28,12 @@ const PIECES = [
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
+const POWERS = ['bomb', 'lightning', 'freeze'];
+const POWER_ICONS = { bomb: '💣', lightning: '⚡', freeze: '❄️' };
+const POWER_CHANCE = 0.15;
+const FREEZE_MS = 5000;
+const FLASH_MS = 150;
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
@@ -40,11 +46,17 @@ const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
 const restartBtn = document.getElementById('restart-btn');
 const themeToggle = document.getElementById('theme-toggle');
+const puEls = {
+  bomb: document.getElementById('pu-bomb'),
+  lightning: document.getElementById('pu-lightning'),
+  freeze: document.getElementById('pu-freeze'),
+};
 
 const THEME_KEY = 'tetris-theme';
 const GRID_COLORS = { dark: '#22222e', light: '#d8d8e4' };
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
+let freezeUntil, powerCounts, flash;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -53,7 +65,17 @@ function createBoard() {
 function randomPiece() {
   const type = Math.floor(Math.random() * 7) + 1;
   const shape = PIECES[type].map(row => [...row]);
-  return { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+  const piece = { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+  if (Math.random() < POWER_CHANCE) {
+    const cells = [];
+    for (let r = 0; r < shape.length; r++)
+      for (let c = 0; c < shape[r].length; c++)
+        if (shape[r][c]) cells.push({ r, c });
+    const cell = cells[Math.floor(Math.random() * cells.length)];
+    const powerType = POWERS[Math.floor(Math.random() * POWERS.length)];
+    piece.power = { type: powerType, r: cell.r, c: cell.c };
+  }
+  return piece;
 }
 
 function collide(shape, ox, oy) {
@@ -140,9 +162,39 @@ function softDrop() {
 }
 
 function lockPiece() {
+  const power = current.power;
   merge();
+  if (power) {
+    activatePower(power.type, current.x + power.c, current.y + power.r);
+  }
   clearLines();
   spawn();
+}
+
+function activatePower(type, bx, by) {
+  const cells = [];
+  if (type === 'bomb') {
+    for (let r = by - 1; r <= by + 1; r++)
+      for (let c = bx - 1; c <= bx + 1; c++)
+        if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+          board[r][c] = 0;
+          cells.push({ r, c });
+        }
+  } else if (type === 'lightning') {
+    for (let c = 0; c < COLS; c++) {
+      board[by][c] = 0;
+      cells.push({ r: by, c });
+    }
+    for (let r = 0; r < ROWS; r++) {
+      board[r][bx] = 0;
+      cells.push({ r, c: bx });
+    }
+  } else if (type === 'freeze') {
+    freezeUntil = performance.now() + FREEZE_MS;
+  }
+  if (cells.length) flash = { cells, until: performance.now() + FLASH_MS };
+  powerCounts[type]++;
+  updatePowerHUD();
 }
 
 function spawn() {
@@ -158,6 +210,21 @@ function updateHUD() {
   scoreEl.textContent = score.toLocaleString();
   linesEl.textContent = lines;
   levelEl.textContent = level;
+}
+
+function updatePowerHUD() {
+  puEls.bomb.textContent = powerCounts.bomb;
+  puEls.lightning.textContent = powerCounts.lightning;
+  puEls.freeze.textContent = powerCounts.freeze;
+}
+
+function drawPowerIcon(context, x, y, size, type) {
+  context.save();
+  context.font = `${Math.floor(size * 0.6)}px sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(POWER_ICONS[type], x * size + size / 2, y * size + size / 2 + 1);
+  context.restore();
 }
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
@@ -209,6 +276,16 @@ function draw() {
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
       drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+
+  if (current.power)
+    drawPowerIcon(ctx, current.x + current.power.c, current.y + current.power.r, BLOCK, current.power.type);
+
+  if (flash && performance.now() < flash.until) {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    for (const { r, c } of flash.cells) ctx.fillRect(c * BLOCK, r * BLOCK, BLOCK, BLOCK);
+  } else if (flash) {
+    flash = null;
+  }
 }
 
 function drawNext() {
@@ -220,6 +297,8 @@ function drawNext() {
   for (let r = 0; r < shape.length; r++)
     for (let c = 0; c < shape[r].length; c++)
       drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
+  if (next.power)
+    drawPowerIcon(nextCtx, offX + next.power.c, offY + next.power.r, NB, next.power.type);
 }
 
 function endGame() {
@@ -247,13 +326,15 @@ function togglePause() {
 function loop(ts) {
   const dt = ts - lastTime;
   lastTime = ts;
-  dropAccum += dt;
-  if (dropAccum >= dropInterval) {
-    dropAccum = 0;
-    if (!collide(current.shape, current.x, current.y + 1)) {
-      current.y++;
-    } else {
-      lockPiece();
+  if (ts >= freezeUntil) {
+    dropAccum += dt;
+    if (dropAccum >= dropInterval) {
+      dropAccum = 0;
+      if (!collide(current.shape, current.x, current.y + 1)) {
+        current.y++;
+      } else {
+        lockPiece();
+      }
     }
   }
   if (gameOver) return;
@@ -271,9 +352,13 @@ function init() {
   dropInterval = 1000;
   dropAccum = 0;
   lastTime = performance.now();
+  freezeUntil = 0;
+  powerCounts = { bomb: 0, lightning: 0, freeze: 0 };
+  flash = null;
   next = randomPiece();
   spawn();
   updateHUD();
+  updatePowerHUD();
   overlay.classList.add('hidden');
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
